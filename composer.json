@@ -1,0 +1,14 @@
+{
+    "name": "videovv/ini-file",
+    "description": "A simple, modern INI parser for PHP 8.0+ with support for complex strings.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "videovv\\IniFile\\": "src/"
+        }
+    }
+}
