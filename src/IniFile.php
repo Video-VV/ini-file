@@ -4,7 +4,7 @@
 
  * @author Video VV
  * @license MIT
- * @version v1.0.0 (PHP 8.4 ready)
+ * @version v1.0.1 (PHP 8.4 ready)
 
  * @description Simple PHP Class to manage INI files (read and write). Adapted for PHP 8.4 with PSR-4 namespace and exceptions.
 */
@@ -165,7 +165,6 @@ class IniFile
         }
         continue;
       }
-      $line = trim( preg_replace('/(?|"(?:[^"\\\\]|\\\\.)*"|"([\s\S]*?)")/u', '0', $line ) );
       
       if( empty( $line ) ) {
         if( isset( $aComment[( empty($section.$afterVariable) ? self::_TOP : $section.$afterVariable) ] ) )  {
@@ -456,11 +455,22 @@ class IniFile
 		if ($this->sections) {
 			foreach ($this->data as $section => $data) {
   			$line = ( $section!=self::_TOP ? '[' . $section . ']' : '' );
-        $content.= $line; $keyCom = ($section!=self::_TOP ? $line : self::_TOP );
+        $content .= $line; 
+        $keyCom = ($section!=self::_TOP ? $line : self::_TOP );
+        
         if( isset( $this->comments[ $keyCom ] ) ) {
-          $content = $this->after( $this->comments[ $keyCom ], $this->behind( $this->comments[ $keyCom ], $content ) );
+          // Клеим BEHIND на ту же строку
+          $content = $this->behind( $this->comments[ $keyCom ], $content );
+          // Затем переводим строку, если что-то было
+          if( mb_substr( $content, -1, 1, 'UTF-8' ) !== PHP_EOL ) {
+            $content .= PHP_EOL;
+          }
+          // Выводим AFTER с новой строки
+          $content = $this->after( $this->comments[ $keyCom ], $content );
         } else {
-          $content.= PHP_EOL;
+          if ($line !== '') {
+            $content .= PHP_EOL;
+          }
         }
   			foreach ($data as $key => $val) {
           $keyCom = $line.$key;
@@ -474,7 +484,7 @@ class IniFile
 		} else {
 			foreach ($this->data as $key => $val) {
         $keyCom = $line.$key;
-        if(isset( $this->comments[ $keyCom ] )) $content = $this->before( $this->comments[ $keyCom ], $content );
+        if(isset($this->comments[ $keyCom ] )) $content = $this->before( $this->comments[ $keyCom ], $content );
         $content .= $this->setValue( $key, $val ); 
         if( isset( $this->comments[ $keyCom ] ) ) { 
           $content = $this->after( $this->comments[ $keyCom ], $this->behind( $this->comments[ $keyCom ], $content ) );
