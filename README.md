@@ -1,7 +1,11 @@
 # Simple PHP INI Class (PHP 8.4 Ready)
 
+[![Latest Release](https://img.shields.io/github/v/release/Video-VV/ini-file)](https://github.com/Video-VV/ini-file/releases)
+
+[🇷🇺 Читать на русском (Read in Russian)](README.ru.md)
+
 A simple, robust, and modern PHP class to manage INI configuration files (read and write). 
-This package is fully compatible with PHP 8.4, supports PSR-4 namespaces, and correctly handles complex string values containing quotes ("), backslashes (\), and semicolons (;) without breaking the INI syntax.
+This package is fully compatible with PHP 8.4, supports PSR-4 namespaces, and correctly handles complex string values containing quotes (`"`), backslashes (`\`), and semicolons (`;`) without breaking the INI syntax.
 
 ## Requirements
 
@@ -30,7 +34,7 @@ try {
     // Parse settings.ini
     $ini = new IniFile('settings.ini');
     
-    // Print parsed data
+    // Print parsed data as an array
     echo '<pre>';
     print_r($ini->data);
     echo '</pre>';
@@ -46,7 +50,7 @@ try {
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
-use videovv\ini-file\IniFile;
+use videovv\IniFile\IniFile;
 
 try {
     $ini = new IniFile('settings.ini');
@@ -87,14 +91,23 @@ $ini->write();
 You can add comments to your ini files programmatically.
 
 ```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+use videovv\IniFile\IniFile;
+
+$ini = new IniFile('settings.ini');
+
 // Add a comment immediately after the variable
 $ini->addComment('This is a comment with "quotes" and ; semicolons', 'first_section:animal');
 
 // Add a comment before the variable
-$ini->addComment('This is a top comment', 'first_section:animal', INI::BEFORE);
+$ini->addComment('This is a top comment', 'first_section:animal', IniFile::BEFORE);
 
 // Remove a comment
 $ini->delComment('first_section:animal');
+
+$ini->write();
 ```
 
 ### Removing Sections and Keys
@@ -119,7 +132,7 @@ $ini->write('settings-backup.ini');
 
 ## Error Handling
 
-Unlike older versions of this class that used `die()`, this package throws standard PHP `\Exception` objects. This allows you to catch errors gracefully:
+This package throws standard PHP `\Exception` objects. This allows for proper error catching:
 
 ```php
 try {
