@@ -2,6 +2,8 @@
 
 Simple PHP class to read and write INI files with full support for comments and JSON values.
 
+**English** | [Русский](README.ru.md)
+
 - Ready for PHP 8.4.
 - PSR-4 namespace: `videovv\IniFile`
 - Error handling: exceptions instead of warnings.
