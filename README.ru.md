@@ -2,10 +2,6 @@
 
 Простой PHP-класс для чтения и записи INI-файлов с полной поддержкой комментариев и JSON-значений.
 
-[![Latest Release](https://img.shields.io/github/v/release/Video-VV/ini-file)](https://github.com/Video-VV/ini-file/releases)
-
-[🇬🇧 Read in English](README.md)
-
 - Готов к PHP 8.4
 - PSR-4 namespace: `videovv\IniFile`
 - Обработка ошибок: исключения вместо предупреждений
@@ -102,6 +98,78 @@ print_r($ini->comments);
 
 ```php
 $ini = new IniFile($file, $sections = true);
+```
+
+## Смешанный формат: переменные верхнего уровня и секции
+
+INI-файл может содержать переменные **до** первой секции (верхний уровень) и переменные **внутри** секций. И то, и другое читается и записывается корректно.
+
+```ini
+; переменные верхнего уровня
+debug = true
+version = "1.0.2"
+
+[first_section]
+animal = "cat"
+port = 3306
+
+[second_section]
+user = "admin"
+```
+
+После чтения переменные верхнего уровня складываются под специальный ключ `@`:
+
+```php
+$ini = new IniFile('mixed.ini');
+
+// переменные верхнего уровня
+$ini->data['@']['debug'];   // true
+$ini->data['@']['version']; // "1.0.2"
+
+// переменные секций
+$ini->data['first_section']['animal']; // "cat"
+$ini->data['second_section']['user'];  // "admin"
+```
+
+При записи переменные верхнего уровня выводятся первыми, без заголовка секции:
+
+```php
+$ini->data['@']['new_top'] = 'value';
+$ini->write('mixed_new.ini');
+```
+
+Результат:
+
+```ini
+debug = true
+version = "1.0.2"
+new_top = "value"
+
+[first_section]
+animal = "cat"
+port = 3306
+
+[second_section]
+user = "admin"
+```
+
+Комментарии для переменных верхнего уровня используют ключ **без** двоеточия:
+
+```php
+$ini->addComment('Перед debug', 'debug', IniFile::BEFORE);
+$ini->addComment('Комментарий в строке', 'debug', IniFile::BEHIND);
+```
+
+Для переменных секций используйте `'section:var'`:
+
+```php
+$ini->addComment('Перед animal', 'first_section:animal', IniFile::BEFORE);
+```
+
+Если нужно прочитать файл **без** секций (плоский формат), передайте `false` вторым аргументом:
+
+```php
+$ini->read('mixed.ini', false); // секции игнорируются, все ключи плоские
 ```
 
 ## Типы данных

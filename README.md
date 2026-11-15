@@ -2,10 +2,6 @@
 
 Simple PHP class to read and write INI files with full support for comments and JSON values.
 
-[![Latest Release](https://img.shields.io/github/v/release/Video-VV/ini-file)](https://github.com/Video-VV/ini-file/releases)
-
-[🇷🇺 Читать на русском (Read in Russian)](README.ru.md)
-
 - Ready for PHP 8.4.
 - PSR-4 namespace: `videovv\IniFile`
 - Error handling: exceptions instead of warnings.
@@ -102,6 +98,78 @@ Constructor accepts the same arguments as `read()`:
 
 ```php
 $ini = new IniFile($file, $sections = true);
+```
+
+## Mixed format: top-level variables and sections
+
+An INI file can contain variables **before** the first section (top-level) and variables **inside** sections. Both are read and written correctly.
+
+```ini
+; top-level variables
+debug = true
+version = "1.0.2"
+
+[first_section]
+animal = "cat"
+port = 3306
+
+[second_section]
+user = "admin"
+```
+
+After `read()`, top-level variables are stored under the special key `@`:
+
+```php
+$ini = new IniFile('mixed.ini');
+
+// top-level variables
+$ini->data['@']['debug'];   // true
+$ini->data['@']['version']; // "1.0.2"
+
+// section variables
+$ini->data['first_section']['animal']; // "cat"
+$ini->data['second_section']['user'];  // "admin"
+```
+
+When writing, top-level variables are output first, without a section header:
+
+```php
+$ini->data['@']['new_top'] = 'value';
+$ini->write('mixed_new.ini');
+```
+
+Result:
+
+```ini
+debug = true
+version = "1.0.2"
+new_top = "value"
+
+[first_section]
+animal = "cat"
+port = 3306
+
+[second_section]
+user = "admin"
+```
+
+Comments for top-level variables use the key **without** a colon:
+
+```php
+$ini->addComment('Before debug', 'debug', IniFile::BEFORE);
+$ini->addComment('Top-level comment', 'debug', IniFile::BEHIND);
+```
+
+For section variables, use `'section:var'`:
+
+```php
+$ini->addComment('Before animal', 'first_section:animal', IniFile::BEFORE);
+```
+
+If you want to read the file **without** sections (flat format), pass `false` as the second argument:
+
+```php
+$ini->read('mixed.ini', false); // sections are ignored, all keys are flat
 ```
 
 ## Data types
