@@ -10,6 +10,7 @@
  *              Added: comments BEFORE sections (including empty), AFTER_EOL and AFTER_EMPTY comments.
  *              JSON values: stdClass objects are marked with a unique key ("\x00obj"),
  *              so they are read back as stdClass, while associative arrays stay arrays.
+ *              The section name "@" is reserved for top-level variables and is rejected.
 */
 
 namespace videovv\IniFile;
@@ -53,6 +54,7 @@ class IniFile
      * @const AFTER_EOL
      * @const AFTER_EMPTY
      * @const _OBJ_MARK
+     * @const _ERR_SECTION_TOP
      */
     const BEFORE      = 'before';
     const BEHIND      = 'behind';
@@ -66,6 +68,8 @@ class IniFile
     const _SEP_BASE64 = 'Ow==';
     /** Уникальный маркер объекта stdClass в JSON */
     const _OBJ_MARK   = "\x00obj";
+    /** Сообщение об ошибке: имя секции "@" зарезервировано */
+    const _ERR_SECTION_TOP = 'Section name "@" is reserved for top-level variables and cannot be used as a section name.';
 
     /** Parse ini file
      * @param  String      $file       - Ini file path
@@ -241,6 +245,9 @@ class IniFile
             if( $line[0] === '[' ) {
                 if( preg_match('/^\[(.*?)\]/', $line, $m) ) {
                     $newSection = trim( $m[1] );
+                    if( $newSection === self::_TOP ) {
+                        throw new \Exception(self::_ERR_SECTION_TOP);
+                    }
                     $secKey  = $this->sectionKey( $newSection );
                     $prevKey = ( $lastKind === 'var' ) ? $this->varKey( $section, $lastVar )
                                : ( $lastKind === 'section' ? $this->sectionKey( $section ) : '' );
@@ -329,6 +336,9 @@ class IniFile
             if ($line[0] === '[') {
                 if (preg_match('/^\[(.*?)\]/', $line, $m)) {
                     $currentSection = trim($m[1]);
+                    if ($currentSection === self::_TOP) {
+                        throw new \Exception(self::_ERR_SECTION_TOP);
+                    }
                 }
             } elseif (preg_match('/^([^=]+)=(.*)$/', $line, $m)) {
                 $key = trim($m[1]);
@@ -355,6 +365,9 @@ class IniFile
 
         foreach( $this->check as $section_var => $section_val ) {
             if( is_array( $section_val ) ) {
+                if( $section_var === self::_TOP ) {
+                    throw new \Exception(self::_ERR_SECTION_TOP);
+                }
                 foreach( $section_val as $var => $val) {
                     if (isset($rawValues[$section_var][$var])) {
                         $val = $rawValues[$section_var][$var];
@@ -403,12 +416,7 @@ class IniFile
         return $this->data;
     }
 
-    /** Рекурсивно оборачивает объекты в маркер.
-     *  Ассоциативные массивы и списки остаются массивами,
-     *  но вложенные в них объекты тоже оборачиваются.
-     *  Обёртка — массив с ключом-маркером (не stdClass, потому что PHP
-     *  не разрешает свойства, начинающиеся с "\0").
-     */
+    /** Рекурсивно оборачивает объекты в маркер. */
     private function wrapObjects( $value ) {
         if ( is_object( $value ) ) {
             $inner = array();
@@ -533,6 +541,9 @@ class IniFile
 
         if( $isSection ) {
             $sectionName = ( $varkey[0] !== self::_TOP ) ? trim( $varkey[0] ) : $varkey[1];
+            if( $sectionName === self::_TOP ) {
+                throw new \Exception(self::_ERR_SECTION_TOP);
+            }
             $varcom = $this->sectionKey( $sectionName );
 
             $this->comments[ $varcom ][] = array(
@@ -715,6 +726,9 @@ class IniFile
 
         if ($this->sections) {
             foreach ($this->data as $section => $data) {
+                if( is_array( $data ) && $section === self::_TOP ) {
+                    throw new \Exception(self::_ERR_SECTION_TOP);
+                }
                 $line   = ( $section != self::_TOP ? '[' . $section . ']' : '' );
                 $keyCom = ( $section != self::_TOP ? $this->sectionKey( $section ) : self::_TOP );
 
