@@ -1,14 +1,31 @@
 {
     "name": "videovv/ini-file",
-    "description": "A simple, modern INI parser for PHP 8.0+ with support for complex strings.",
+    "description": "Simple PHP class to read and write INI files with comments and JSON values support.",
     "type": "library",
     "license": "MIT",
+    "keywords": [
+        "ini",
+        "ini-file",
+        "config",
+        "configuration",
+        "parser",
+        "writer",
+        "comments",
+        "json"
+    ],
+    "authors": [
+        {
+            "name": "Video VV"
+        }
+    ],
     "require": {
-        "php": ">=8.0"
+        "php": ">=8.1",
+        "ext-json": "*"
     },
     "autoload": {
         "psr-4": {
             "videovv\\IniFile\\": "src/"
         }
-    }
+    },
+    "minimum-stability": "stable"
 }

@@ -1,147 +1,422 @@
-# Simple PHP INI Class (PHP 8.4 Ready)
+# videovv/IniFile
+
+Simple PHP class to read and write INI files with full support for comments and JSON values.
 
 [![Latest Release](https://img.shields.io/github/v/release/Video-VV/ini-file)](https://github.com/Video-VV/ini-file/releases)
 
 [🇷🇺 Читать на русском (Read in Russian)](README.ru.md)
 
-A simple, robust, and modern PHP class to manage INI configuration files (read and write). 
-This package is fully compatible with PHP 8.4, supports PSR-4 namespaces, and correctly handles complex string values containing quotes (`"`), backslashes (`\`), and semicolons (`;`) without breaking the INI syntax.
-
-## Requirements
-
-- PHP 8.0 or higher (Fully tested on PHP 8.4)
-- Composer for installation
+- Ready for PHP 8.4.
+- PSR-4 namespace: `videovv\IniFile`
+- Error handling: exceptions instead of warnings.
+- Support for comments associated with INI entries: `BEFORE`, `BEHIND`, `AFTER`, `AFTER_EOL`, `AFTER_EMPTY`.
+- Support for JSON values: associative arrays are represented as arrays, while `stdClass` objects are represented as objects prefixed with `"\u0000obj"`.
+- Escaping of `"` and `\` characters within string values.
+- Safe handling of the `;` character inside JSON values.
 
 ## Installation
 
-You can install the package via Composer:
+**Option 1 — Composer (recommended):**
 
 ```bash
 composer require videovv/ini-file
 ```
 
-## Basic Usage
-
-### Reading an ini file
+Then just use the class:
 
 ```php
-<?php
-require __DIR__ . '/vendor/autoload.php';
+use videovv\IniFile\IniFile;
+```
+
+**Option 2 — without Composer:**
+
+If you don't use Composer, copy `IniFile.php` into your project and connect it manually:
+
+```php
+require __DIR__ . '/path/to/IniFile.php';
 
 use videovv\IniFile\IniFile;
+```
 
+Or register your own PSR-4 autoloader for the `videovv\IniFile` namespace:
+
+```php
+spl_autoload_register(function ($class) {
+    $prefix = 'videovv\\IniFile\\';
+    if (strncmp($class, $prefix, strlen($prefix)) !== 0) {
+        return;
+    }
+    $relative = substr($class, strlen($prefix));
+    $file = __DIR__ . '/path/to/' . str_replace('\\', '/', $relative) . '.php';
+    if (is_file($file)) {
+        require $file;
+    }
+});
+```
+
+## Quick start
+
+```php
+use videovv\IniFile\IniFile;
+
+$ini = new IniFile();
+$ini->data = [
+    'database' => [
+        'host'    => 'localhost',
+        'port'    => 3306,
+        'debug'   => true,
+        'options' => ['charset' => 'utf8mb4', 'persistent' => false],
+    ],
+];
+
+$ini->addComment('Database settings', 'database', IniFile::BEFORE);
+$ini->addComment('Default port', 'database:port', IniFile::BEHIND);
+$ini->write('config.ini');
+```
+
+Result:
+
+```ini
+; Database settings
+[database]
+host = "localhost"
+port = 3306 ; Default port
+debug = true
+options = {"charset":"utf8mb4","persistent":false}
+```
+
+## Reading
+
+```php
+$ini = new IniFile('config.ini');
+
+// or
+$ini = new IniFile();
+$ini->read('config.ini');
+
+print_r($ini->data);
+print_r($ini->comments);
+```
+
+Constructor accepts the same arguments as `read()`:
+
+```php
+$ini = new IniFile($file, $sections = true);
+```
+
+## Data types
+
+| PHP value                | Written as              | Read back as           |
+|--------------------------|-------------------------|------------------------|
+| `'string'`               | `"string"`              | `string`               |
+| `123`, `1.5`             | `123`, `1.5`            | `int` / `float`        |
+| `true` / `false`         | `true` / `false`        | `bool`                 |
+| `null`                   | (empty)                 | `''`                   |
+| `['a'=>1,'b'=>2]`        | `{"a":1,"b":2}`         | `array`                |
+| `[1,2,3]`                | `[1,2,3]`               | `array`                |
+| `new stdClass`           | `{"\u0000obj":{...}}`   | `stdClass`             |
+
+`stdClass` objects are marked with a unique key `"\x00obj"` so that they can be distinguished from associative arrays after reading.
+
+## Booleans
+
+```php
+$ini->data['section']['enabled']  = true;
+$ini->data['section']['disabled'] = false;
+```
+
+Written as:
+
+```ini
+enabled = true
+disabled = false
+```
+
+After `read()` both are real PHP booleans:
+
+```php
+var_dump($ini->data['section']['enabled']);  // bool(true)
+var_dump($ini->data['section']['disabled']); // bool(false)
+```
+
+## Objects
+
+```php
+$user = new stdClass();
+$user->name = 'John';
+$user->age  = 25;
+
+$ini->data['section']['user'] = $user;
+```
+
+Written as (the object is wrapped in a marker `"\u0000obj"`):
+
+```ini
+user = {"\u0000obj":{"name":"John","age":25}}
+```
+
+After `read()` the value is `stdClass` again:
+
+```php
+$ini2 = new IniFile('test.ini');
+echo $ini2->data['section']['user']->name; // John
+echo $ini2->data['section']['user']->age;  // 25
+```
+
+Nested objects and objects inside arrays are preserved too:
+
+```php
+$address = new stdClass();
+$address->city = 'Moscow';
+
+$user = new stdClass();
+$user->name    = 'John';
+$user->address = $address;          // nested object
+$user->roles   = ['admin', 'user']; // array with strings
+
+$ini->data['section']['user'] = $user;
+$ini->data['section']['users'] = [
+    'first'  => $user,                // object inside associative array
+    'second' => $address,             // another object
+];
+```
+
+After `read()`:
+
+```php
+$ini2->data['section']['user']->address->city;           // 'Moscow'
+$ini2->data['section']['user']->roles[0];                // 'admin'
+$ini2->data['section']['users']['first']->address->city; // 'Moscow'
+$ini2->data['section']['users']['second']->city;         // 'Moscow'
+```
+
+### Associative array vs object
+
+```php
+$ini->data['section']['as_array']  = ['a' => 1, 'b' => 2]; // stays array
+$ini->data['section']['as_object'] = (object)['a' => 1, 'b' => 2]; // stays stdClass
+
+$ini->write('test.ini');
+$ini2 = new IniFile('test.ini');
+
+is_array($ini2->data['section']['as_array']);   // true
+is_object($ini2->data['section']['as_object']); // true
+
+$ini2->data['section']['as_array']['a'];  // 1
+$ini2->data['section']['as_object']->a;   // 1
+```
+
+## Comments
+
+Five comment types are supported:
+
+| Constant                | Position                                          |
+|-------------------------|---------------------------------------------------|
+| `IniFile::BEFORE`       | On a separate line before section/variable        |
+| `IniFile::BEHIND`       | On the same line, right after the value           |
+| `IniFile::AFTER`        | On the same line, after `BEHIND`                  |
+| `IniFile::AFTER_EOL`    | On the next line after section/variable           |
+| `IniFile::AFTER_EMPTY`  | Empty line after section/variable                 |
+
+### All comment types for one variable
+
+```php
+$ini->addComment('before',     'section:var', IniFile::BEFORE);
+$ini->addComment('behind',     'section:var', IniFile::BEHIND);
+$ini->addComment('after',      'section:var', IniFile::AFTER);
+$ini->addComment('after_eol',  'section:var', IniFile::AFTER_EOL);
+$ini->addComment('',           'section:var', IniFile::AFTER_EMPTY);
+```
+
+Result:
+
+```ini
+; before
+var = "value" ; behind ; after
+; after_eol
+
+```
+
+### Comments for a section
+
+```php
+$ini->addComment('',            'section', IniFile::BEFORE); // empty line before section
+$ini->addComment('Section one', 'section', IniFile::BEFORE);
+$ini->addComment('inline',      'section', IniFile::BEHIND);
+```
+
+Result:
+
+```ini
+
+; Section one
+[section] ; inline
+```
+
+### Comments for a top-level variable (no section)
+
+```php
+$ini->addComment('top before', 'key', IniFile::BEFORE);
+$ini->addComment('top behind', 'key', IniFile::BEHIND);
+```
+
+Result:
+
+```ini
+; top before
+key = "value" ; top behind
+```
+
+### delComment
+
+```php
+$ini->delComment('section:var');                  // remove all comments of the variable
+$ini->delComment('section:var', IniFile::BEHIND); // remove only BEHIND comments
+$ini->delComment('section');                      // remove all comments of the section
+$ini->delComment();                               // remove all comments
+```
+
+## Escaping
+
+String values are escaped for `"` and `\`:
+
+```php
+$ini->data['section']['path']  = 'C:\temp\file.txt';
+$ini->data['section']['quote'] = 'a "b" c';
+```
+
+Written as:
+
+```ini
+path = "C:\\temp\\file.txt"
+quote = "a \"b\" c"
+```
+
+Semicolons inside JSON values are replaced with `Ow==` (base64 of `;`) during writing and restored during reading, so that `;` inside a JSON string does not break parsing.
+
+## Writing without sections
+
+```php
+$ini = new IniFile();
+$ini->sections = false;
+$ini->data = [
+    'key1' => 'value1',
+    'key2' => 42,
+    'key3' => true,
+];
+$ini->write('flat.ini');
+```
+
+Result:
+
+```ini
+key1 = "value1"
+key2 = 42
+key3 = true
+```
+
+## Exceptions
+
+`read()` throws `\Exception` in the following cases:
+
+- file path is not specified;
+- file does not exist;
+- path is a directory;
+- file is not readable.
+
+`write()` throws `\Exception` if the file cannot be opened for writing or if writing fails.
+
+```php
 try {
-    // Parse settings.ini
-    $ini = new IniFile('settings.ini');
-    
-    // Print parsed data as an array
-    echo '<pre>';
-    print_r($ini->data);
-    echo '</pre>';
-    
+    $ini = new IniFile('missing.ini');
 } catch (\Exception $e) {
-    echo 'Error: ' . $e->getMessage();
+    echo $e->getMessage();
 }
 ```
 
-### Writing and Updating an INI file
+## Full example
 
 ```php
-<?php
-require __DIR__ . '/vendor/autoload.php';
-
 use videovv\IniFile\IniFile;
 
-try {
-    $ini = new IniFile('settings.ini');
-    
-    // Update an existing setting
-    $ini->data['first_section']['animal'] = 'HORSE';
-    
-    // Add a new setting to an existing section
-    $ini->data['first_section']['new_key'] = 'new_value';
-    
-    // Add a completely new section
-    $ini->data['new_section']['some_key'] = 123;
-    
-    // Save settings back to the file
-    $ini->write();
-    
-} catch (\Exception $e) {
-    echo 'Error: ' . $e->getMessage();
-}
+$obj = new stdClass();
+$obj->name = 'John';
+$obj->age  = 25;
+
+$ini = new IniFile();
+$ini->data = [
+    'first_section' => [
+        'animal'    => 'HE SAID "WOOF"',
+        'path'      => 'C:\temp\file.txt',
+        'quote'     => 'a "b" c \\ d',
+        'note'      => '\'hello\'; world "x"',
+        'semicolon' => 'a; b; c',
+        'enabled'   => true,
+        'disabled'  => false,
+    ],
+    'second_section' => [
+        'array_json' => ['word' => 'hello', 'number' => 200, 'boolean' => true, 'object' => $obj],
+        'user'       => $obj,
+    ],
+];
+
+// All comment types for a variable
+$ini->addComment('Comment before animal', 'first_section:animal', IniFile::BEFORE);
+$ini->addComment('Comment behind animal', 'first_section:animal', IniFile::BEHIND);
+$ini->addComment('Comment after animal',  'first_section:animal', IniFile::AFTER);
+$ini->addComment('Comment after_eol',     'first_section:animal', IniFile::AFTER_EOL);
+$ini->addComment('',                      'first_section:animal', IniFile::AFTER_EMPTY);
+
+// Comments for a section
+$ini->addComment('',                'second_section', IniFile::BEFORE);
+$ini->addComment('SECOND SECTION',  'second_section', IniFile::BEFORE);
+
+$ini->write('test.ini');
 ```
 
-## Advanced Features
+Result:
 
-### Handling Arrays (JSON Encoding)
-The class automatically handles arrays and objects by encoding them into JSON strings. This is perfect for storing complex configuration data in a flat INI file.
+```ini
+[first_section]
+; Comment before animal
+animal = "HE SAID \"WOOF\"" ; Comment behind animal ; Comment after animal
+; Comment after_eol
 
-```php
-$ini->data['fifth_section']['my_array_json'] = ['a' => 200, 'bb' => 'test'];
-$ini->write();
+path = "C:\\temp\\file.txt"
+quote = "a \"b\" c \\ d"
+note = "'hello'Ow== world \"x\""
+semicolon = "aOw== bOw== c"
+enabled = true
+disabled = false
 
-// Output in ini file:
-// [fifth_section]
-// my_array_json = {"a":200,"bb":"test"}
-```
-*When the file is read back, the JSON is automatically decoded back into a PHP array.*
-
-### Managing Comments
-You can add comments to your ini files programmatically.
-
-```php
-<?php
-require __DIR__ . '/vendor/autoload.php';
-
-use videovv\IniFile\IniFile;
-
-$ini = new IniFile('settings.ini');
-
-// Add a comment immediately after the variable
-$ini->addComment('This is a comment with "quotes" and ; semicolons', 'first_section:animal');
-
-// Add a comment before the variable
-$ini->addComment('This is a top comment', 'first_section:animal', IniFile::BEFORE);
-
-// Remove a comment
-$ini->delComment('first_section:animal');
-
-$ini->write();
+; SECOND SECTION
+[second_section]
+array_json = {"word":"hello","number":200,"boolean":true,"object":{"\u0000obj":{"name":"John","age":25}}}
+user = {"\u0000obj":{"name":"John","age":25}}
 ```
 
-### Removing Sections and Keys
+After `read()`:
 
 ```php
-// Remove a specific key
-unset($ini->data['first_section']['animal']);
+$ini2 = new IniFile('test.ini');
 
-// Remove a whole section
-unset($ini->data['new_section']);
+// booleans
+var_dump($ini2->data['first_section']['enabled']);  // bool(true)
+var_dump($ini2->data['first_section']['disabled']); // bool(false)
 
-$ini->write();
-```
+// associative array stays array
+is_array($ini2->data['second_section']['array_json']); // true
+$ini2->data['second_section']['array_json']['word'];    // 'hello'
 
-### Writing to a New File
-You can easily save the current data to a different file and continue working with it:
+// stdClass stays object
+is_object($ini2->data['second_section']['user']);       // true
+$ini2->data['second_section']['user']->name;            // 'John'
 
-```php
-// Save to a new file and switch the internal pointer to it
-$ini->write('settings-backup.ini');
-```
-
-## Error Handling
-
-This package throws standard PHP `\Exception` objects. This allows for proper error catching:
-
-```php
-try {
-    $ini = new IniFile('/path/to/nonexistent/file.ini');
-} catch (\Exception $e) {
-    echo 'Caught error: ' . $e->getMessage();
-}
+// nested object inside array
+is_object($ini2->data['second_section']['array_json']['object']); // true
+$ini2->data['second_section']['array_json']['object']->age;        // 25
 ```
 
 ## License
 
-This project is licensed under the MIT.
+MIT
