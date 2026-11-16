@@ -1,6 +1,8 @@
 # videovv/IniFile
 
-Simple PHP class to read and write INI files with full support for comments and JSON values.
+Simple PHP class to read and write INI files with full support for comments, JSON values, and flat mode.
+
+[![Latest Release](https://img.shields.io/github/v/release/Video-VV/ini-file)](https://github.com/Video-VV/ini-file/releases)
 
 **English** | [Русский](README.ru.md)
 
@@ -11,6 +13,9 @@ Simple PHP class to read and write INI files with full support for comments and 
 - Support for JSON values: associative arrays are represented as arrays, while `stdClass` objects are represented as objects prefixed with `"\u0000obj"`.
 - Escaping of `"` and `\` characters within string values.
 - Safe handling of the `;` character inside JSON values.
+- Support for `#` as a comment marker alongside `;`.
+- Support for multiline string and JSON values.
+- Flat mode support (`sections = false`) for reading and writing without sections.
 
 ## Installation
 

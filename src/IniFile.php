@@ -4,13 +4,19 @@
 
  * @author Video VV
  * @license MIT
- * @version v1.0.2 (PHP 8.4 ready)
+ * @version v1.1.0 (PHP 8.4 ready, flat mode support, multiline strings, JSON comments)
 
  * @description Simple PHP Class to manage INI files (read and write). Adapted for PHP 8.4 with PSR-4 namespace and exceptions.
+ *              Added: flat mode support (sections = false) with correct read/write.
  *              Added: comments BEFORE sections (including empty), AFTER_EOL and AFTER_EMPTY comments.
  *              JSON values: stdClass objects are marked with a unique key ("\x00obj"),
  *              so they are read back as stdClass, while associative arrays stay arrays.
- *              The section name "@" is reserved for top-level variables and is rejected.
+ *              The section name "@" is reserved for top-level variables and is rejected in file text.
+ *              Added: multiline string and JSON values support, optional line width wrapping.
+ *              Added: comments inside JSON are removed only when outside string literals.
+ *              Fixed: inline BEHIND comments are collected only in parseIniLines (no duplication).
+ *              Added: '#' is supported as a comment marker alongside ';'.
+ *              Fixed: read() and write() no longer override $this->sections when the argument is omitted.
 */
 
 namespace videovv\IniFile;
@@ -47,6 +53,11 @@ class IniFile
      */
     public $check = array();
 
+    /** Максимальная ширина строки при записи (0 - без ограничений)
+     * @public Int
+     */
+    public $maxWidth = 0;
+
     /** Ini file constant
      * @const BEFORE
      * @const BEHIND
@@ -65,6 +76,7 @@ class IniFile
     const _LINE       = 'line';
     const _VAR        = 'var';
     const _SEP        = ';';
+    const _SEP_HASH   = '#';
     const _SEP_BASE64 = 'Ow==';
     /** Уникальный маркер объекта stdClass в JSON */
     const _OBJ_MARK   = "\x00obj";
@@ -137,6 +149,48 @@ class IniFile
         );
     }
 
+    /** Перенос длинного значения по ширине (для строк и JSON)
+     * @param  String  $value     - значение для переноса
+     * @param  Int     $maxWidth  - максимальная ширина (0 - без ограничений)
+     * @param  Bool    $isJson    - является ли значение JSON
+     * @return String
+     */
+    private function wrapValue( $value, $maxWidth = 0, $isJson = false ) {
+        if ( $maxWidth <= 0 || strlen( $value ) <= $maxWidth ) {
+            return $value;
+        }
+
+        if ( $isJson ) {
+            $decoded = json_decode( $value, true );
+            if ( $decoded !== null ) {
+                $pretty = json_encode(
+                    $decoded,
+                    JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                );
+                if ( $pretty !== false ) {
+                    return $pretty;
+                }
+            }
+            return $value;
+        }
+
+        $words = preg_split( '/\s+/', $value );
+        $lines = array();
+        $currentLine = '';
+        foreach ( $words as $word ) {
+            if ( $currentLine !== '' && strlen( $currentLine ) + 1 + strlen( $word ) > $maxWidth ) {
+                $lines[] = $currentLine;
+                $currentLine = $word;
+            } else {
+                $currentLine .= ( $currentLine === '' ? '' : ' ' ) . $word;
+            }
+        }
+        if ( $currentLine !== '' ) {
+            $lines[] = $currentLine;
+        }
+        return implode( PHP_EOL, $lines );
+    }
+
     /** Detect type variable
      * @param  Mixed       $val        - value in ini file variable
      */
@@ -145,12 +199,16 @@ class IniFile
         if( $var ) {
             if ( is_object( $val ) || is_array( $val ) ) {
                 $wrapped = $this->wrapObjects( $val );
-                $content = $var.' = ' . $this->toJSON( $this->replace_com_data( $wrapped ) ) . PHP_EOL;
+                $json = $this->toJSON( $this->replace_com_data( $wrapped ) );
+                $json = $this->wrapValue( $json, $this->maxWidth, true );
+                $content = $var.' = ' . $json . PHP_EOL;
             } elseif ( is_string($val)) {
                 if( empty( $val )) {
                     $content = $var . ' = ' . PHP_EOL;
                 } else {
-                    $content = $var . ' = "' . $this->escape_value( $this->replace_com_data( $val ) ) . '"' . PHP_EOL;
+                    $escaped = $this->escape_value( $this->replace_com_data( $val ) );
+                    $wrapped = $this->wrapValue( $escaped, $this->maxWidth, false );
+                    $content = $var . ' = "' . $wrapped . '"' . PHP_EOL;
                 }
             } elseif ( is_int( $val ) || is_float( $val )) {
                 $content = $var . ' = ' . (string)$val . PHP_EOL;
@@ -159,7 +217,9 @@ class IniFile
             } elseif ( is_null( $val )) {
                 $content = $var . ' = ' . PHP_EOL;
             } else {
-                $content = $var . ' = "' . $this->escape_value( $this->replace_com_data( $val ) ) . '"' . PHP_EOL;
+                $escaped = $this->escape_value( $this->replace_com_data( $val ) );
+                $wrapped = $this->wrapValue( $escaped, $this->maxWidth, false );
+                $content = $var . ' = "' . $wrapped . '"' . PHP_EOL;
             }
         }
         return $content;
@@ -178,7 +238,7 @@ class IniFile
     }
 
     /** Извлечение BEHIND-комментария из строки значения (с учётом кавычек).
-     *  Возвращает [часть до комментария (trim), сам комментарий с ';' в начале или NULL].
+     *  Возвращает [часть до комментария (trim), сам комментарий с ';' или '#' в начале или NULL].
      */
     private function splitInlineComment( $line ) {
         $len = strlen($line);
@@ -189,7 +249,7 @@ class IniFile
             if( $escaped ) { $escaped = false; continue; }
             if( $ch === '\\' ) { $escaped = true; continue; }
             if( $ch === '"' ) { $inQuote = !$inQuote; continue; }
-            if( !$inQuote && $ch === self::_SEP ) {
+            if( !$inQuote && ( $ch === self::_SEP || $ch === self::_SEP_HASH ) ) {
                 $before  = rtrim( substr( $line, 0, $i ) );
                 $comment = trim( substr( $line, $i ) );
                 return array( $before, $comment );
@@ -198,7 +258,9 @@ class IniFile
         return array( rtrim( $line ), NULL );
     }
 
-    /** Parse ini file (comments) */
+    /** Parse ini file (comments) — только BEFORE, AFTER_EOL, AFTER_EMPTY.
+     *  BEHIND-комментарии собираются в parseIniLines(), чтобы избежать дублирования.
+     */
     private function selectComm( $aLine = NULL ) {
         $aComment = array( self::_TOP => array() );
         $section  = self::_TOP;
@@ -237,7 +299,7 @@ class IniFile
                 continue;
             }
 
-            if( $line[0] === self::_SEP ) {
+            if( $line[0] === self::_SEP || $line[0] === self::_SEP_HASH ) {
                 $pending[] = array( 'type' => 'comment', 'text' => $line . PHP_EOL );
                 continue;
             }
@@ -254,11 +316,6 @@ class IniFile
 
                     $flush( $secKey, $prevKey, $lastKind, 'section' );
 
-                    $rest = trim( substr( $line, strlen( '[' . $m[1] . ']' ) ) );
-                    if( $rest !== '' && $rest[0] === self::_SEP ) {
-                        $aComment[ $secKey ][] = array( self::BEHIND => $rest . PHP_EOL );
-                    }
-
                     $section  = $newSection;
                     $lastVar  = '';
                     $lastKind = 'section';
@@ -270,16 +327,11 @@ class IniFile
                 $var = trim( $m[1] );
                 $val = trim( $m[2] );
 
-                list( $valPart, $inlineCom ) = $this->splitInlineComment( $val );
                 $varKey  = $this->varKey( $section, $var );
                 $prevKey = ( $lastKind === 'var' ) ? $this->varKey( $section, $lastVar )
                            : ( $lastKind === 'section' ? $this->sectionKey( $section ) : '' );
 
                 $flush( $varKey, $prevKey, $lastKind, 'var' );
-
-                if( $inlineCom !== NULL && $inlineCom !== '' ) {
-                    $aComment[ $varKey ][] = array( self::BEHIND => $inlineCom . PHP_EOL );
-                }
 
                 $lastVar  = $var;
                 $lastKind = 'var';
@@ -312,62 +364,221 @@ class IniFile
         return $aComment;
     }
 
-    /** Parse ini file */
-    function read( $file = NULL, $sections = TRUE ) {
+    /** Построчный парсер INI-файла с поддержкой многострочных строк и JSON.
+     *  Собирает данные, "сырые" значения и inline BEHIND-комментарии.
+     */
+    private function parseIniLines( $content, $sections = TRUE ) {
+        $lines = explode( PHP_EOL, $content );
+        $data = array();
+        $raw = array();
+        $inlineComments = array();
+        $currentSection = $sections ? self::_TOP : null; // <-- ВАЖНО: null для плоского режима
+        $i = 0;
+        $lineCount = count( $lines );
+
+        while ( $i < $lineCount ) {
+            $line = $lines[$i];
+            $trimmed = trim( $line );
+
+            if ( $trimmed === '' || $trimmed[0] === self::_SEP || $trimmed[0] === self::_SEP_HASH ) {
+                $i++;
+                continue;
+            }
+
+            if ( $trimmed[0] === '[' ) {
+                if ( preg_match( '/^\[(.*?)\](.*)$/', $trimmed, $m ) ) {
+                    $currentSection = trim( $m[1] );
+                    if ( $currentSection === self::_TOP ) {
+                        throw new \Exception(self::_ERR_SECTION_TOP);
+                    }
+                    if ( !isset( $data[ $currentSection ] ) ) {
+                        $data[ $currentSection ] = array();
+                        $raw[ $currentSection ] = array();
+                    }
+                    // BEHIND-комментарий для секции
+                    $rest = trim( $m[2] );
+                    if ( $rest !== '' && ( $rest[0] === self::_SEP || $rest[0] === self::_SEP_HASH ) ) {
+                        $secKey = $this->sectionKey( $currentSection );
+                        $inlineComments[ $secKey ][] = array( self::BEHIND => $rest . PHP_EOL );
+                    }
+                }
+                $i++;
+                continue;
+            }
+
+            if ( preg_match( '/^([^=]+)=(.*)$/', $trimmed, $m ) ) {
+                $key = trim( $m[1] );
+                $valuePart = trim( $m[2] );
+
+                $isQuoted = ( isset( $valuePart[0] ) && $valuePart[0] === '"' );
+                $isJson = ( isset( $valuePart[0] ) && ( $valuePart[0] === '{' || $valuePart[0] === '[' ) );
+
+                if ( $isQuoted || $isJson ) {
+                    $accum = $valuePart;
+                    $inQuote = false;
+                    $balance = 0;
+                    $escaped = false;
+                    $closed = false;
+
+                    $len = strlen( $accum );
+                    for ( $j = 0; $j < $len; $j++ ) {
+                        $ch = $accum[$j];
+                        if ( $escaped ) { $escaped = false; continue; }
+                        if ( $ch === '\\' ) { $escaped = true; continue; }
+                        if ( $ch === '"' ) { $inQuote = !$inQuote; continue; }
+                        if ( !$inQuote ) {
+                            if ( $ch === '{' || $ch === '[' ) $balance++;
+                            elseif ( $ch === '}' || $ch === ']' ) $balance--;
+                        }
+                    }
+                    if ( !$inQuote && $balance <= 0 ) {
+                        $closed = true;
+                    }
+
+                    if ( !$closed ) {
+                        $i++;
+                        while ( $i < $lineCount ) {
+                            $nextLine = $lines[$i];
+                            $trimmedNext = trim( $nextLine );
+
+                            $insideString = $inQuote;
+
+                            if ( $isJson && !$insideString && $trimmedNext !== ''
+                                 && ( $trimmedNext[0] === self::_SEP || $trimmedNext[0] === self::_SEP_HASH ) ) {
+                                $i++;
+                                continue;
+                            }
+
+                            $accum .= PHP_EOL . $nextLine;
+
+                            $inQuote = false; $balance = 0; $escaped = false;
+                            $len = strlen( $accum );
+                            for ( $j = 0; $j < $len; $j++ ) {
+                                $ch = $accum[$j];
+                                if ( $escaped ) { $escaped = false; continue; }
+                                if ( $ch === '\\' ) { $escaped = true; continue; }
+                                if ( $ch === '"' ) { $inQuote = !$inQuote; continue; }
+                                if ( !$inQuote ) {
+                                    if ( $ch === '{' || $ch === '[' ) $balance++;
+                                    elseif ( $ch === '}' || $ch === ']' ) $balance--;
+                                }
+                            }
+                            if ( !$inQuote && $balance <= 0 ) {
+                                break;
+                            }
+                            $i++;
+                        }
+                    }
+
+                    list( $accumClean, $inlineCom ) = $this->splitInlineComment( $accum );
+                    $value = $accumClean;
+                    if ( $inlineCom !== NULL && $inlineCom !== '' ) {
+                        $varKey = $this->varKey( $currentSection, $key );
+                        $inlineComments[ $varKey ][] = array( self::BEHIND => $inlineCom . PHP_EOL );
+                    }
+                } else {
+                    list( $valPart, $inlineCom ) = $this->splitInlineComment( $valuePart );
+                    $value = $valPart;
+                    if ( $inlineCom !== NULL && $inlineCom !== '' ) {
+                        $varKey = $this->varKey( $currentSection, $key );
+                        $inlineComments[ $varKey ][] = array( self::BEHIND => $inlineCom . PHP_EOL );
+                    }
+                }
+
+                $rawValue = $value;
+                if ( strlen( $rawValue ) >= 2 && $rawValue[0] === '"' && substr( $rawValue, -1 ) === '"' ) {
+                    $rawValue = substr( $rawValue, 1, -1 );
+                }
+
+                // =========================================================
+                // ВАЖНО: Если $currentSection === null, значит плоский режим
+                // =========================================================
+                if ( $currentSection === null ) {
+                    $data[ $key ] = $value;
+                    $raw[ $key ] = $rawValue;
+                } else {
+                    $data[ $currentSection ][ $key ] = $value;
+                    $raw[ $currentSection ][ $key ] = $rawValue;
+                }
+                $i++;
+                continue;
+            }
+
+            $i++;
+        }
+
+        return array( 'data' => $data, 'raw' => $raw, 'comments' => $inlineComments );
+    }
+
+    /** Parse ini file read() */
+    function read( $file = NULL, $sections = NULL ) {
+        if ( $sections !== NULL ) {
+            $this->sections = $sections;
+        }
         if( empty( $file ) ) { throw new \Exception('ini file path is not specified.'); }
         $this->file = ($file) ? $file : $this->file;
         if( !file_exists( $this->file )) { throw new \Exception('ini file not found: ' . $this->file); }
         if( is_dir( $this->file ) ) { throw new \Exception('The specified path is a directory, not a file: ' . $this->file); }
         if( !is_readable( $this->file ) ) { throw new \Exception('Permission denied. Cannot read file: ' . $this->file); }
 
-        $this->sections = $sections;
-        $this->data = parse_ini_file( realpath($this->file), $this->sections, INI_SCANNER_RAW );
-        $fileContent = file_get_contents( realpath($this->file) );
-        $this->comments = $this->selectComm( explode( PHP_EOL, $fileContent ) );
+        $fileContent = file_get_contents( realpath( $this->file ) );
 
-        $rawLines = explode( PHP_EOL, $fileContent );
-        $rawValues = array();
-        $currentSection = self::_TOP;
+        $parsed = $this->parseIniLines( $fileContent, $this->sections );
 
-        foreach ($rawLines as $line) {
-            $line = trim($line);
-            if (empty($line) || $line[0] === ';') continue;
-
-            if ($line[0] === '[') {
-                if (preg_match('/^\[(.*?)\]/', $line, $m)) {
-                    $currentSection = trim($m[1]);
-                    if ($currentSection === self::_TOP) {
-                        throw new \Exception(self::_ERR_SECTION_TOP);
+        // =========================================================
+        // ИСПРАВЛЕНИЕ ДЛЯ ПЛОСКОГО РЕЖИМА (без секций)
+        // =========================================================
+        if ( !$this->sections ) {
+            $lines = explode( PHP_EOL, $fileContent );
+            $result = array();
+            foreach ( $lines as $line ) {
+                $line = trim( $line );
+                if ( $line === '' || $line[0] === ';' || $line[0] === '#' ) continue;
+                if ( preg_match( '/^([^=]+)=(.*)$/', $line, $m ) ) {
+                    $key = trim( $m[1] );
+                    $val = trim( $m[2] );
+                    if ( strlen( $val ) >= 2 && $val[0] === '"' && substr( $val, -1 ) === '"' ) {
+                        $val = substr( $val, 1, -1 );
                     }
-                }
-            } elseif (preg_match('/^([^=]+)=(.*)$/', $line, $m)) {
-                $key = trim($m[1]);
-                $rawVal = trim($m[2]);
-
-                if (strpos($rawVal, ';') !== false) {
-                    if (preg_match('/^"(?:[^"\\\\]|\\\\.)*"/u', $rawVal, $matchQuote)) {
-                        $rawVal = $matchQuote[0];
+                    if ( is_string( $val ) && ( strpos( $val, '{' ) === 0 || strpos( $val, '[' ) === 0 ) ) {
+                        $decoded = json_decode( $val, true );
+                        if ( $decoded !== null ) $val = $decoded;
                     } else {
-                        $pos = strpos($rawVal, ';');
-                        $rawVal = trim(substr($rawVal, 0, $pos));
+                        if ( $val === 'true' ) $val = true;
+                        elseif ( $val === 'false' ) $val = false;
+                        elseif ( is_numeric( $val ) ) $val = ( strpos( $val, '.' ) !== false ) ? (float) $val : (int) $val;
                     }
+                    $result[ $key ] = $val;
                 }
+            }
+            $this->data = $result;
+            return $this->data;
+        }
 
-                if (strlen($rawVal) >= 2 && $rawVal[0] === '"' && substr($rawVal, -1) === '"') {
-                    $rawVal = substr($rawVal, 1, -1);
-                }
+        // =========================================================
+        // ОБЫЧНЫЙ РЕЖИМ (с секциями)
+        // =========================================================
+        $this->data = $parsed['data'];
 
-                $rawValues[$currentSection][$key] = $rawVal;
+        $commentsFromSelect = $this->selectComm( explode( PHP_EOL, $fileContent ) );
+        $commentsFromParse = $parsed['comments'];
+
+        $this->comments = $commentsFromSelect;
+        foreach ( $commentsFromParse as $varKey => $comList ) {
+            if ( !isset( $this->comments[ $varKey ] ) ) {
+                $this->comments[ $varKey ] = array();
+            }
+            foreach ( $comList as $com ) {
+                $this->comments[ $varKey ][] = $com;
             }
         }
 
+        $rawValues = $parsed['raw'];
         $this->check = $this->data;
 
         foreach( $this->check as $section_var => $section_val ) {
             if( is_array( $section_val ) ) {
-                if( $section_var === self::_TOP ) {
-                    throw new \Exception(self::_ERR_SECTION_TOP);
-                }
+                // Обрабатываем все секции (включая '@' для верхнего уровня)
                 foreach( $section_val as $var => $val) {
                     if (isset($rawValues[$section_var][$var])) {
                         $val = $rawValues[$section_var][$var];
@@ -389,6 +600,7 @@ class IniFile
                     }
                 }
             } else {
+                // Обработка плоских переменных (на случай, если они попали в корень)
                 if (isset($rawValues[self::_TOP][$section_var])) {
                     $section_val = $rawValues[self::_TOP][$section_var];
                 }
@@ -410,6 +622,7 @@ class IniFile
                 unset( $this->data[$section_var] );
             }
         }
+
         if( count( $this->topData[self::_TOP] ) > 0 ) {
             $this->data = array_merge( $this->topData, $this->data );
         }
@@ -717,30 +930,43 @@ class IniFile
     }
 
     /** Write ini file */
-    function write( $file = NULL, $data = array(), $sections = TRUE, $comments = array() ) {
+    function write( $file = NULL, $data = array(), $sections = NULL, $comments = array(), $maxWidth = NULL ) {
+
         $this->data     = (!empty($data))     ? $data     : $this->data;
         $this->file     = ($file)             ? $file     : $this->file;
-        $this->sections = $sections;
+        if ( $sections !== NULL ) { 
+           $this->sections = $sections; 
+        }
         $this->comments = (!empty($comments)) ? $comments : $this->comments;
+        if ( $maxWidth !== NULL ) {
+            $this->maxWidth = (int)$maxWidth;
+        }
         $content = '';
 
         if ($this->sections) {
             foreach ($this->data as $section => $data) {
-                if( is_array( $data ) && $section === self::_TOP ) {
+                // Ключ '@' — это переменные верхнего уровня, выводим их без заголовка секции
+                $isTop = ( $section === self::_TOP );
+                
+                // Если случайно создали секцию с именем '@' (не массив), это ошибка
+                if ( $isTop && !is_array( $data ) ) {
                     throw new \Exception(self::_ERR_SECTION_TOP);
                 }
-                $line   = ( $section != self::_TOP ? '[' . $section . ']' : '' );
-                $keyCom = ( $section != self::_TOP ? $this->sectionKey( $section ) : self::_TOP );
+
+                $line   = ( !$isTop ? '[' . $section . ']' : '' );
+                $keyCom = ( !$isTop ? $this->sectionKey( $section ) : self::_TOP );
 
                 if( isset( $this->comments[ $keyCom ] ) ) {
                     $content = $this->before( $this->comments[ $keyCom ], $content );
                 }
 
-                if( $section != self::_TOP && $content !== '' && !$this->endsWithEol( $content ) ) {
+                // Если это не верхний уровень, и предыдущий контент не закончился переводом строки
+                if( !$isTop && $content !== '' && !$this->endsWithEol( $content ) ) {
                     $content .= PHP_EOL;
                 }
 
-                if( $section != self::_TOP ) {
+                // Выводим заголовок секции только если это не верхний уровень
+                if( !$isTop ) {
                     $content .= $line;
                 }
 
@@ -787,7 +1013,35 @@ class IniFile
                 }
             }
         } else {
+            // Режим без секций — просто выводим все данные, игнорируя структуру
             foreach ($this->data as $key => $val) {
+                // Если данные пришли из массива '@', разворачиваем их
+                if ( $key === self::_TOP && is_array( $val ) ) {
+                    foreach ($val as $topKey => $topVal) {
+                        $keyCom = $this->varKey( self::_TOP, $topKey );
+                        if( isset( $this->comments[ $keyCom ] ) ) {
+                            $content = $this->before( $this->comments[ $keyCom ], $content );
+                            if( !$this->endsWithEol( $content ) ) $content .= PHP_EOL;
+                        }
+                        $content .= $this->setValue( $topKey, $topVal );
+                        if( isset( $this->comments[ $keyCom ] ) ) {
+                            $content = $this->after_empty(
+                                $this->comments[ $keyCom ],
+                                $this->after_eol(
+                                    $this->comments[ $keyCom ],
+                                    $this->after(
+                                        $this->comments[ $keyCom ],
+                                        $this->behind( $this->comments[ $keyCom ], $content )
+                                    )
+                                )
+                            );
+                        }
+                        if( !$this->endsWithEol( $content ) ) $content .= PHP_EOL;
+                    }
+                    continue;
+                }
+
+                // Обычные плоские ключи
                 $keyCom = $this->varKey( self::_TOP, $key );
                 if( isset( $this->comments[ $keyCom ] ) ) {
                     $content = $this->before( $this->comments[ $keyCom ], $content );
