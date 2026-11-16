@@ -369,6 +369,81 @@ quote = "a \"b\" c"
 
 Semicolons inside JSON values are replaced with `Ow==` (base64 of `;`) during writing and restored during reading, so that `;` inside a JSON string does not break parsing.
 
+## Multiline strings
+
+You can write string values that span multiple lines. The parser preserves line breaks inside the string.
+
+```php
+$ini = new IniFile();
+$ini->data = [
+    'section' => [
+        'description' => "This is a long description
+that spans multiple lines
+and should be preserved.",
+    ],
+];
+
+$ini->write('multiline.ini');
+```
+
+Result:
+
+```ini
+[section]
+description = "This is a long description
+that spans multiple lines
+and should be preserved."
+```
+
+After `read()` the value is a single string with `\n` line breaks:
+
+```php
+$ini2 = new IniFile('multiline.ini');
+echo $ini2->data['section']['description'];
+// Output:
+// This is a long description
+// that spans multiple lines
+// and should be preserved.
+```
+
+**Note:** If a string contains `#` or `;` inside a multiline value, they are treated as part of the string (not as comment markers), because the parser knows the string is not closed yet.
+
+### Multiline JSON values
+
+JSON values can also span multiple lines:
+
+```php
+$ini = new IniFile();
+$ini->data = [
+    'section' => [
+        'config' => [
+            'name' => 'example',
+            'values' => [1, 2, 3],
+        ],
+    ],
+];
+
+$ini->write('json_multiline.ini');
+```
+
+Result (pretty-printed):
+
+```ini
+[section]
+config = {
+    "name": "example",
+    "values": [1, 2, 3]
+}
+```
+
+After `read()` the value is the original array.
+
+**Note:** To enable pretty-printing (multiline JSON), set `$ini->maxWidth` to a positive value, or pass it as the last argument to `write()`:
+
+```php
+$ini->write('json_multiline.ini', [], true, [], 80);
+```
+
 ## Writing without sections
 
 ```php
